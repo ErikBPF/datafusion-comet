@@ -24,6 +24,7 @@ use crate::{
 };
 use arrow::array::ArrayRef;
 use arrow::datatypes::{DataType, Field, Schema, SchemaRef};
+use datafusion::common::tree_node::TreeNodeRecursion;
 use datafusion::common::Result as DataFusionResult;
 use datafusion::physical_plan::execution_plan::{Boundedness, EmissionType};
 use datafusion::physical_plan::metrics::{
@@ -229,6 +230,13 @@ impl ExecutionPlan for ShuffleScanExec {
         vec![]
     }
 
+    fn apply_expressions(
+        &self,
+        _f: &mut dyn FnMut(&Arc<dyn PhysicalExpr>) -> DataFusionResult<TreeNodeRecursion>,
+    ) -> DataFusionResult<TreeNodeRecursion> {
+        Ok(TreeNodeRecursion::Continue)
+    }
+
     fn with_new_children(
         self: Arc<Self>,
         _: Vec<Arc<dyn ExecutionPlan>>,
@@ -352,7 +360,7 @@ mod tests {
     use crate::execution::shuffle::{CompressionCodec, ShuffleBlockWriter};
     use arrow::array::{Int32Array, StringArray};
     use arrow::datatypes::{DataType, Field, Schema};
-    use arrow::ipc::writer::CompressionContext;
+    use arrow::ipc::writer::IpcWriteContext;
     use arrow::record_batch::RecordBatch;
     use datafusion::physical_plan::metrics::Time;
     use std::io::Cursor;
@@ -382,12 +390,7 @@ mod tests {
         let mut buf = Cursor::new(Vec::new());
         let ipc_time = Time::new();
         writer
-            .write_batch(
-                &batch,
-                &mut buf,
-                &mut CompressionContext::default(),
-                &ipc_time,
-            )
+            .write_batch(&batch, &mut buf, &mut IpcWriteContext::default(), &ipc_time)
             .unwrap();
 
         // Read back (skip 16-byte header: 8 compressed_length + 8 field_count)
@@ -457,7 +460,7 @@ mod tests {
             .write_batch(
                 &dict_batch,
                 &mut buf,
-                &mut CompressionContext::default(),
+                &mut IpcWriteContext::default(),
                 &ipc_time,
             )
             .unwrap();
