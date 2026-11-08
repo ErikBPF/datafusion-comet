@@ -25,7 +25,24 @@ Standalone, test-only probes related to [apache/datafusion-comet#7573](https://g
 
 Run with Spark 4.2.0, Scala 2.13.18 and Java 17. Supply matching Delta Spark and storage JARs, version 4.4.0 or 4.4.1. Use a fresh output directory for every invocation.
 
+The setup requires `curl`. Set `SPARK_HOME` and `JAVA_HOME` to your local installations before running it. The Comet artifact is `org.apache.datafusion:comet-spark-spark4.2_2.13:1.2.0`; match the Spark 4.2 and Scala 2.13 lines. This assembly contains the platform library used by the validated Linux x86_64 run; no separate Comet companion JAR was used. Other platforms remain unverified.
+
 ```bash
+set -eu
+: "${SPARK_HOME:?Set SPARK_HOME to a Spark 4.2.0 installation}"
+: "${JAVA_HOME:?Set JAVA_HOME to a Java 17 installation}"
+export PATH="$JAVA_HOME/bin:$PATH"
+DELTA_VERSION=4.4.0 # Use 4.4.1 to repeat the other validated pairing.
+ARTIFACT_DIR=$(mktemp -d)
+export DELTA_SPARK_JAR="$ARTIFACT_DIR/delta-spark_2.13-$DELTA_VERSION.jar"
+export DELTA_STORAGE_JAR="$ARTIFACT_DIR/delta-storage-$DELTA_VERSION.jar"
+export COMET_JAR="$ARTIFACT_DIR/comet-spark-spark4.2_2.13-1.2.0.jar"
+curl --fail --location --retry 3 -o "$DELTA_SPARK_JAR" \
+  "https://repo.maven.apache.org/maven2/io/delta/delta-spark_2.13/$DELTA_VERSION/delta-spark_2.13-$DELTA_VERSION.jar"
+curl --fail --location --retry 3 -o "$DELTA_STORAGE_JAR" \
+  "https://repo.maven.apache.org/maven2/io/delta/delta-storage/$DELTA_VERSION/delta-storage-$DELTA_VERSION.jar"
+curl --fail --location --retry 3 -o "$COMET_JAR" \
+  https://repo.maven.apache.org/maven2/org/apache/datafusion/comet-spark-spark4.2_2.13/1.2.0/comet-spark-spark4.2_2.13-1.2.0.jar
 mkdir classes
 java -Xmx1g -cp "$SPARK_HOME/jars/*" scala.tools.nsc.Main \
   -classpath "$SPARK_HOME/jars/*:$DELTA_SPARK_JAR:$DELTA_STORAGE_JAR" \
