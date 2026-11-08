@@ -25,7 +25,8 @@ import java.nio.file.{Files, Paths}
 import org.apache.spark.sql.{Column, DataFrame, Row, SparkSession}
 import org.apache.spark.sql.catalyst.InternalRow
 import org.apache.spark.sql.catalyst.analysis.UnresolvedAttribute
-import org.apache.spark.sql.catalyst.expressions.{BoundReference}
+import org.apache.spark.sql.catalyst.expressions.{BoundReference, GenericInternalRow}
+import org.apache.spark.sql.catalyst.util.ArrayData
 import org.apache.spark.sql.classic.ClassicConversions._
 
 import org.apache.spark.sql.delta.stats.DeletedRecordCountsHistogramUtils.DeletedRecordCountsHistogramAgg
@@ -133,7 +134,43 @@ object DeltaDeletedRecordHistogramChecks {
       }
       query("deleted_all_bucket_edges", edges.toDF("v").agg(deletedCol)) { rows =>
         require(rows.length == 1 && rows.head.getSeq[Long](0) == Seq(1L,2L,2L,2L,2L,2L,2L,2L,2L,2L)) }
-      require(passed == 8, s"expected 8 named cases, observed $passed")
+      check("deleted_row_buffer_offsets") {
+        // Exercise Spark's row APIs with distinct mutable and serialized-input offsets.
+        val a = DeletedRecordCountsHistogramAgg(bound)
+          .withNewMutableAggBufferOffset(2).withNewInputAggBufferOffset(3)
+        val writer = DeletedRecordCountsHistogramAgg(bound).withNewMutableAggBufferOffset(3)
+        val target = new GenericInternalRow(Array[Any](10L, 20L, null, 40L, 50L))
+        val source = new GenericInternalRow(Array[Any](60L, 70L, 80L, null, 90L))
+        a.initialize(target)
+        writer.initialize(source)
+        Seq(0L, 9L).foreach(v => a.update(target, InternalRow(v)))
+        Seq(10L, 100L).foreach(v => writer.update(source, InternalRow(v)))
+        writer.serializeAggregateBufferInPlace(source)
+        a.merge(target, source)
+        require(a.eval(target).asInstanceOf[ArrayData].toLongArray().toSeq == deletedCounts(Seq(0L, 9L, 10L, 100L)))
+        require(Seq(0, 1, 3, 4).forall(i => target.values(i) == Seq[Any](10L, 20L, null, 40L, 50L)(i)),
+          "mutable aggregate buffer overwrote another aggregate's slot")
+        require(Seq(0, 1, 2, 4).forall(i => source.values(i) == Seq[Any](60L, 70L, 80L, null, 90L)(i)),
+          "serialization overwrote another aggregate's input slot")
+      }
+      spark.conf.set("spark.sql.objectHashAggregate.sortBased.fallbackThreshold", 1)
+      val otherHistogram = Column(DeletedRecordCountsHistogramAgg(UnresolvedAttribute("w")).toAggregateExpression()).as("other")
+      val mixed = grouped.withColumn("w", col("v") + 100L).groupBy("g")
+        .agg(count(col("v")).as("n"), deletedCol, sum(col("w")).as("total"), otherHistogram)
+      require(Seq("h", "other").forall(name =>
+        mixed.schema(name).dataType == ArrayType(LongType) && !mixed.schema(name).nullable))
+      query("deleted_mixed_aggregate_slots", mixed) { rows =>
+        require(rows.length == 3 && rows.map(_.getLong(0)).toSet == Set(0L, 1L, 2L))
+        rows.foreach { row =>
+          val values = (0L until 600L).filter(_ % 3 == row.getLong(0)).map(_ % 120)
+          require(row.getLong(1) == values.size)
+          require(row.getSeq[Long](2) == deletedCounts(values))
+          require(row.getLong(3) == values.map(_ + 100L).sum)
+          require(row.getSeq[Long](4) == deletedCounts(values.map(_ + 100L)))
+        }
+        fallbackObserved(mixed)
+      }
+      require(passed == 10, s"expected 10 named cases, observed $passed")
       Files.write(out.resolve("summary.json"),s"{\"mode\":\"$mode\",\"passed\":$passed,\"native_acceptance\":false}".getBytes(UTF_8))
       println(s"PASS DeltaDeletedRecordHistogramChecks $mode cases=$passed (reference/fallback only)")
     } finally spark.stop()
