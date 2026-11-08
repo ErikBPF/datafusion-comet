@@ -70,3 +70,34 @@ Grounding: selected equivalents of the following versioned upstream tests, not a
 - [ChecksumDVMetricsSuite (v4.4.1)](https://github.com/delta-io/delta/blob/v4.4.1/spark/src/test/scala/org/apache/spark/sql/delta/ChecksumDVMetricsSuite.scala)
 
 Validation uses Comet 1.2.0, not a build of this branch. Current-main expression support and the production image remain unverified.
+
+## Automated reference-state coverage
+
+[DeletedRecordHistogramSuite](../../../contrib/delta-spark/src/test/scala/org/apache/spark/sql/delta/DeletedRecordHistogramSuite.scala) binds five row-state contract tests into the existing Delta contrib ScalaTest module. They cover null/empty state, all bucket edges and exact serialization, real mutable/input buffer slots, rejection semantics, and wrapping counters. The suite uses Delta's package because Delta 3.3 and 4.0 keep this helper `private[delta]`.
+
+The existing Delta contrib workflow discovers this suite with the rest of the module. It runs on the existing Spark 3.5 / Delta 3.3.2, Spark 4.0 / Delta 4.0.1, and Spark 4.1 / Delta 4.3.1 matrix in nightly and `run-delta-tests` jobs. No workflow or version-matrix change is required. Contrib suites are intentionally excluded from the main Linux/macOS suite registry.
+
+After building Comet as described in the contributor guide, run from the repository root:
+
+```bash
+set -eu
+report=contrib/delta-spark/target/surefire-reports/TEST-org.apache.spark.sql.delta.DeletedRecordHistogramSuite.xml
+rm -f "$report"
+./mvnw -B -Pspark-3.5,delta test -Dtest=none \
+  -DwildcardSuites=org.apache.spark.sql.delta
+python3 - "$report" <<'PYTHON'
+import sys
+import xml.etree.ElementTree as ET
+suite = ET.parse(sys.argv[1]).getroot()
+assert suite.get("name") == "org.apache.spark.sql.delta.DeletedRecordHistogramSuite"
+cases = suite.findall("testcase")
+assert len(cases) == 5
+assert all(case.find(tag) is None for case in cases
+           for tag in ("failure", "error", "skipped"))
+print("PASS DeletedRecordHistogramSuite: 5 tests, no failures or skips")
+PYTHON
+```
+
+Package discovery avoids trying to load the contrib-only suite in preceding reactor modules. The report is removed before execution so a stale report cannot satisfy the five-case gate. Zero discovery in preceding modules is not test evidence.
+
+Repeat with `-Pspark-4.0,delta` and `-Pspark-4.1,delta` for the other existing pairs. Require five passing tests with zero canceled/ignored tests per profile. These are Spark/Delta reference tests without a Spark session or Comet JNI. They do not replace the grouped Spark/Comet flow probes above or certify Rust/JVM state interoperability. Spark 4.2 / Delta 4.4 remains the separately validated manual pairing, not a new CI support claim.
