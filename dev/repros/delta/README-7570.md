@@ -58,7 +58,9 @@ jar cf checks.jar -C classes .
   checks.jar comet /tmp/DeltaFileSizeHistogramChecks-comet
 ```
 
-Expected: 7 named cases, matching row/schema JSON across stock and Comet runs, and `native_acceptance: false` in `summary.json`. The Comet lane requires an accelerated control query; passing Delta probes can still execute in Spark. Execution plans are saved beside rows. These are manually run probes, not tests wired into the Comet CI reactor.
+Expected: 9 named cases, matching row/schema JSON across stock and Comet runs, and `native_acceptance: false` in `summary.json`. The Comet lane requires an accelerated control query; passing Delta probes can still execute in Spark. Execution plans are saved beside rows. These are manually run probes, not tests wired into the Comet CI reactor.
+
+Two checks pin mixed aggregate state: the row API uses mutable slot 2 and serialized input slot 3 while preserving neighboring slots, and a grouped query mixes `COUNT`, two histograms over different inputs, and `SUM` under observed JVM sort fallback. These checks exercise Spark aggregate buffer routing; they do not test a Comet-produced partial state.
 
 Grounding: selected equivalents of the following versioned upstream tests, not a replacement for their full suites:
 
